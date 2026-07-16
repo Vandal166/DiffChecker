@@ -1,0 +1,1670 @@
+<!DOCTYPE html>
+<!--
+  Diff/Check — a local-only text diff checker.
+  Everything (markup, styles, logic) lives in this single file on purpose:
+  open it directly in a browser and it works, no server, no build step,
+  no network access, no external libraries.
+
+  Two ways to see differences:
+  1. Live, inside the textareas themselves (transparent-text-over-
+     highlighted-layer overlay), each with a synced line-number gutter.
+  2. A dedicated "Diff" panel below, showing an aligned Original |
+     Modified side-by-side comparison with its own line numbers.
+  Prev/Next buttons jump between changed regions ("hunks") inside the
+  diff panel (and no longer scroll the editors).
+  See the comments in the script block below for how it all fits together.
+-->
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diff/Check — Local Text Diff Checker</title>
+    <style>
+        /* ============================================================
+           DESIGN TOKENS
+           ============================================================ */
+        :root {
+            --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+            --font-ui: var(--font-mono);
+
+            --bg: #f4f5f7;
+            --surface: #ffffff;
+            --surface-alt: #eceef2;
+            --border: #dde1e8;
+            --text: #1b1e27;
+            --text-muted: #6b7280;
+            --accent: #3d4f8f;
+            --accent-strong: #2c3a6b;
+            --accent-contrast: #ffffff;
+            --focus-ring: #3d4f8f;
+
+            --add-bg: #cdeed9;
+            --add-text: #0f5c33;
+            --remove-bg: #f8d0d0;
+            --remove-text: #8f1d22;
+
+            --radius: 6px;
+            --shadow: 0 1px 2px rgba(20, 20, 30, .06), 0 1px 1px rgba(20, 20, 30, .04);
+            --content-font-size: 14px;
+            --editor-height: 360px;
+        }
+
+        html[data-theme="dark"] {
+            --bg: #12141a;
+            --surface: #1a1d25;
+            --surface-alt: #20232c;
+            --border: #2b2f3a;
+            --text: #e6e8ee;
+            --text-muted: #8b93a3;
+            --accent: #7c8fe0;
+            --accent-strong: #97a7ea;
+            --accent-contrast: #12141a;
+            --focus-ring: #97a7ea;
+
+            --add-bg: #12492c;
+            --add-text: #74e8a6;
+            --remove-bg: #4a1c1e;
+            --remove-text: #f79a97;
+        }
+
+        /* ============================================================
+           BASE
+           ============================================================ */
+        * {
+            box-sizing: border-box;
+        }
+        html,
+        body {
+            height: 100%;
+        }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-ui);
+            font-size: var(--content-font-size);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+        button,
+        input {
+            font-family: inherit;
+            font-size: 13px;
+            color: inherit;
+        }
+        button {
+            cursor: pointer;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 7px 12px;
+            transition: background-color .1s ease, border-color .1s ease;
+        }
+        button:hover {
+            background: var(--surface-alt);
+        }
+        button:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible {
+            outline: 2px solid var(--focus-ring);
+            outline-offset: 1px;
+        }
+        button:active {
+            transform: translateY(1px);
+        }
+        button:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--accent-contrast);
+            font-weight: 600;
+        }
+        .btn-primary:hover {
+            background: var(--accent-strong);
+            border-color: var(--accent-strong);
+        }
+
+        /* ============================================================
+           TOOLBAR (sticky)
+           ============================================================ */
+        .toolbar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 10px 16px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            box-shadow: var(--shadow);
+        }
+        .toolbar-brand {
+            font-weight: 700;
+            letter-spacing: .02em;
+            margin-right: 6px;
+            white-space: nowrap;
+        }
+        .toolbar-brand span {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+        .toolbar-spacer {
+            flex: 1;
+        }
+
+        .toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--text-muted);
+            user-select: none;
+        }
+        .toggle input {
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .segmented {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .segmented-btn {
+            border: none;
+            border-radius: 0;
+            background: var(--surface);
+            padding: 7px 12px;
+            border-right: 1px solid var(--border);
+        }
+        .segmented-btn:last-child {
+            border-right: none;
+        }
+        .segmented-btn.active {
+            background: var(--accent);
+            color: var(--accent-contrast);
+            font-weight: 600;
+        }
+
+        .font-control {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .font-control button {
+            border: none;
+            border-radius: 0;
+            border-right: 1px solid var(--border);
+            padding: 7px 10px;
+        }
+        .font-control button:last-child {
+            border-right: none;
+        }
+
+        .icon-btn {
+            padding: 7px 10px;
+            font-size: 15px;
+            line-height: 1;
+        }
+
+        /* ============================================================
+           LAYOUT
+           ============================================================ */
+        .app {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* --- summary strip: proportional bar + counts + hunk nav + copy --- */
+        .summary-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            padding: 10px 12px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+        .stat-bar-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            min-width: 220px;
+        }
+        .stat-bar {
+            flex: 1;
+            max-width: 320px;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            background: var(--border);
+        }
+        .stat-bar .seg-add {
+            background: var(--add-text);
+            height: 100%;
+        }
+        .stat-bar .seg-remove {
+            background: var(--remove-text);
+            height: 100%;
+        }
+        .stat-bar .seg-equal {
+            background: var(--border);
+            height: 100%;
+        }
+        .stat-numbers {
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+        .stat-numbers .n-add {
+            color: var(--add-text);
+            font-weight: 700;
+        }
+        .stat-numbers .n-remove {
+            color: var(--remove-text);
+            font-weight: 700;
+        }
+
+        .hunk-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        .hunk-counter {
+            font-size: 12px;
+            color: var(--text-muted);
+            min-width: 96px;
+            text-align: center;
+        }
+
+        /* ============================================================
+           EDITORS (textarea + line numbers + highlight overlay)
+           ============================================================ */
+        .editors {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+        .editor-pane {
+            display: flex;
+            flex-direction: column;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        .pane-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 8px 12px;
+            background: var(--surface-alt);
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: .03em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .pane-meta {
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+
+        .editor-body {
+            position: relative;
+            display: flex;
+            height: var(--editor-height);
+        }
+
+        .line-numbers {
+            flex: 0 0 auto;
+            min-width: 44px;
+            overflow: hidden;
+            position: relative;
+            background: var(--surface-alt);
+            border-right: 1px solid var(--border);
+        }
+        .line-numbers-inner {
+            padding: 12px 8px 12px 4px;
+            text-align: right;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: var(--content-font-size);
+            line-height: 1.5;
+            white-space: pre;
+            user-select: none;
+        }
+
+        .editor-scroll {
+            position: relative;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .highlight-layer {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .highlight-layer-inner {
+            padding: 12px;
+            font-family: var(--font-mono);
+            font-size: var(--content-font-size);
+            line-height: 1.5;
+            white-space: pre;
+            color: var(--text);
+        }
+
+        textarea {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            border: none;
+            resize: none;
+            background: transparent;
+            color: transparent;
+            caret-color: var(--text);
+            font-family: var(--font-mono);
+            font-size: var(--content-font-size);
+            line-height: 1.5;
+            padding: 12px;
+            white-space: pre;
+            overflow: auto;
+            tab-size: 2;
+        }
+        textarea::selection {
+            background: rgba(124, 143, 224, .4);
+        }
+        textarea:focus {
+            outline: none;
+        }
+
+        .ov-add {
+            background: var(--add-bg);
+            color: var(--add-text);
+            border-radius: 2px;
+        }
+        .ov-remove {
+            background: var(--remove-bg);
+            color: var(--remove-text);
+            text-decoration: line-through;
+            border-radius: 2px;
+        }
+
+        .editors-resizer {
+            height: 10px;
+            margin-top: -4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: ns-resize;
+            user-select: none;
+        }
+        .editors-resizer::before {
+            content: "";
+            width: 40px;
+            height: 4px;
+            border-radius: 2px;
+            background: var(--border);
+        }
+        .editors-resizer:hover::before {
+            background: var(--accent);
+        }
+
+        /* ============================================================
+           DIFF RESULTS PANEL (side-by-side, always shown once compared)
+           ============================================================ */
+        .results {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+        .results-header {
+            padding: 10px 12px;
+            background: var(--surface-alt);
+            border-bottom: 1px solid var(--border);
+        }
+        .results-title {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: .03em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .diff-output {
+            font-family: var(--font-mono);
+            font-size: var(--content-font-size);
+            line-height: 1.5;
+            max-height: 65vh;
+            overflow: auto;
+        }
+        .empty-state {
+            padding: 28px 16px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .line-row {
+            display: flex;
+            align-items: flex-start;
+            padding: 0 12px 0 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .line-gutter {
+            flex: 0 0 48px;          /* wider to avoid wrapping 4-digit numbers */
+            padding: 0 8px;
+            text-align: right;
+            color: var(--text-muted);
+            user-select: none;
+            background: var(--surface-alt);
+            border-right: 1px solid var(--border);
+            white-space: nowrap;      /* prevent line number wrapping */
+        }
+        .line-content {
+            flex: 1;
+            white-space: pre-wrap;
+            word-break: break-word;
+            padding-left: 10px;
+        }
+        .line-row.type-add {
+            background: var(--add-bg);
+        }
+        .line-row.type-add .line-content {
+            color: var(--add-text);
+        }
+        .line-row.type-remove {
+            background: var(--remove-bg);
+        }
+        .line-row.type-remove .line-content {
+            color: var(--remove-text);
+            text-decoration: line-through;
+        }
+        .line-row.type-equal .line-content {
+            color: var(--text);
+        }
+
+        .tok-add {
+            background: var(--add-bg);
+            color: var(--add-text);
+            border-radius: 3px;
+        }
+        .tok-remove {
+            background: var(--remove-bg);
+            color: var(--remove-text);
+            text-decoration: line-through;
+            border-radius: 3px;
+        }
+
+        .split-view {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+        }
+        .split-col {
+            overflow-x: auto;
+        }
+        .split-col+.split-col {
+            border-left: 1px solid var(--border);
+        }
+        .split-col-header {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            padding: 6px 12px;
+            background: var(--surface-alt);
+            border-bottom: 1px solid var(--border);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+            color: var(--text-muted);
+        }
+        .split-col.words-flow {
+            white-space: pre-wrap;
+            word-break: break-word;
+            padding: 10px 12px;
+        }
+
+        /* inline view (unified) */
+        .inline-view {
+            white-space: pre-wrap;
+            word-break: break-word;
+            padding: 10px 12px;
+        }
+        .inline-view .line-row {
+            padding: 0 0 0 8px;
+        }
+        .inline-view .line-gutter {
+            flex: 0 0 32px;          /* wide enough for 3-digit line numbers */
+            padding: 0 4px;
+            border-right: none;
+            background: transparent;
+            white-space: nowrap;
+        }
+        .inline-view .line-row.type-add .line-gutter {
+            color: var(--add-text);
+        }
+        .inline-view .line-row.type-remove .line-gutter {
+            color: var(--remove-text);
+        }
+
+        /* currently-focused change, shown in the diff panel only */
+        .active-hunk {
+            outline: 2px solid var(--accent);
+            outline-offset: -1px;
+            position: relative;
+        }
+
+        /* ============================================================
+           FOOTER
+           ============================================================ */
+        .app-footer {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+            padding: 4px 16px 24px;
+        }
+
+        /* ============================================================
+           RESPONSIVE
+           ============================================================ */
+        @media (max-width: 860px) {
+            .editors {
+                grid-template-columns: 1fr;
+            }
+            .split-view {
+                grid-template-columns: 1fr;
+            }
+            .split-col+.split-col {
+                border-left: none;
+                border-top: 1px solid var(--border);
+            }
+            .toolbar {
+                align-items: flex-start;
+            }
+            .toolbar-actions {
+                gap: 6px;
+            }
+            .editor-body {
+                height: 280px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                transition: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="toolbar">
+        <div class="toolbar-brand">Diff<span>/</span>Check</div>
+        <div class="toolbar-actions">
+            <button id="compareBtn" class="btn-primary" title="Ctrl+Enter">Compare</button>
+            <button id="clearBtn" title="Ctrl+L">Clear</button>
+
+            <label class="toggle">
+                <input type="checkbox" id="autoCompareToggle" checked>
+                <span>Auto-compare</span>
+            </label>
+
+            <div class="segmented" id="granularitySegment" role="group" aria-label="Comparison granularity">
+                <button data-value="line" class="segmented-btn active" type="button">Line</button>
+                <button data-value="word" class="segmented-btn" type="button">Word</button>
+            </div>
+
+            <div class="segmented" id="viewSegment" role="group" aria-label="Result layout">
+                <button data-value="inline" class="segmented-btn" type="button">Inline</button>
+                <button data-value="split" class="segmented-btn active" type="button">Side-by-side</button>
+            </div>
+
+            <div class="font-control" aria-label="Font size">
+                <button id="fontDec" aria-label="Decrease font size" type="button">A−</button>
+                <button id="fontInc" aria-label="Increase font size" type="button">A+</button>
+            </div>
+
+            <div class="toolbar-spacer"></div>
+
+            <button id="themeToggle" class="icon-btn" title="Toggle dark mode" type="button">◐</button>
+        </div>
+    </header>
+
+    <main class="app">
+
+        <section class="editors">
+            <div class="editor-pane">
+                <div class="pane-header">Original text <span class="pane-meta" id="leftMeta"></span></div>
+                <div class="editor-body">
+                    <div class="line-numbers" id="originalLineNumbers"><div class="line-numbers-inner" id="originalLineNumbersInner">1</div></div>
+                    <div class="editor-scroll">
+                        <div class="highlight-layer" id="originalHighlight"><div class="highlight-layer-inner" id="originalHighlightInner"></div></div>
+                        <textarea id="originalText" spellcheck="false" wrap="off" placeholder="Paste or type the original text…"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="editor-pane">
+                <div class="pane-header">Modified text <span class="pane-meta" id="rightMeta"></span></div>
+                <div class="editor-body">
+                    <div class="line-numbers" id="modifiedLineNumbers"><div class="line-numbers-inner" id="modifiedLineNumbersInner">1</div></div>
+                    <div class="editor-scroll">
+                        <div class="highlight-layer" id="modifiedHighlight"><div class="highlight-layer-inner" id="modifiedHighlightInner"></div></div>
+                        <textarea id="modifiedText" spellcheck="false" wrap="off" placeholder="Paste or type the modified text…"></textarea>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="editors-resizer" id="editorsResizer" title="Drag to resize"></div>
+
+        <!-- Summary bar moved to just above the results panel -->
+        <div class="summary-bar">
+            <div class="stat-bar-wrap">
+                <div class="stat-bar" id="statBar"></div>
+                <div class="stat-numbers" id="statNumbers">No comparison yet</div>
+            </div>
+            <div class="hunk-nav">
+                <button id="hunkPrev" disabled type="button">← Prev</button>
+                <span class="hunk-counter" id="hunkCounter">No changes</span>
+                <button id="hunkNext" disabled type="button">Next →</button>
+            </div>
+            <button id="copyBtn" disabled type="button">Copy diff as text</button>
+        </div>
+
+        <section class="results" id="resultsSection">
+            <div class="results-header"><h2 class="results-title">Diff</h2></div>
+            <div class="diff-output" id="diffOutput">
+                <p class="empty-state">Paste text on both sides, then click Compare (or press Ctrl+Enter) to see a side-by-side diff here.</p>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="app-footer">Runs entirely in your browser. Nothing you type is sent anywhere. Long lines scroll horizontally rather than wrapping, so line numbers always line up.</footer>
+
+    <script>
+        (function() {
+            'use strict';
+
+            /* ================================================================
+               1. DIFF ENGINE
+               Myers' O(ND) shortest-edit-script algorithm, operating on arrays
+               of tokens (lines or words — the engine itself doesn't care).
+               Pure functions, no DOM access, so they're easy to reuse or test.
+               ================================================================ */
+
+            function diffArrays(a, b, isEqual) {
+                isEqual = isEqual || function(x, y) { return x === y; };
+                const n = a.length,
+                    m = b.length;
+                const max = n + m;
+                if (max === 0) return [];
+
+                const v = new Map();
+                v.set(1, 0);
+                const trace = [];
+                let finalD = -1;
+
+                for (let d = 0; d <= max; d++) {
+                    for (let k = -d; k <= d; k += 2) {
+                        let x;
+                        if (k === -d || (k !== d && v.get(k - 1) < v.get(k + 1))) {
+                            x = v.get(k + 1);
+                        } else {
+                            x = v.get(k - 1) + 1;
+                        }
+                        let y = x - k;
+                        while (x < n && y < m && isEqual(a[x], b[y])) { x++;
+                            y++; }
+                        v.set(k, x);
+                        if (x >= n && y >= m) finalD = d;
+                    }
+                    trace.push(new Map(v));
+                    if (finalD >= 0) break;
+                }
+
+                const ops = [];
+                let x = n,
+                    y = m;
+                for (let d = finalD; d >= 0; d--) {
+                    const vv = trace[d];
+                    const k = x - y;
+                    let prevK;
+                    if (k === -d || (k !== d && vv.get(k - 1) < vv.get(k + 1))) {
+                        prevK = k + 1;
+                    } else {
+                        prevK = k - 1;
+                    }
+                    const prevX = vv.get(prevK);
+                    const prevY = prevX - prevK;
+
+                    while (x > prevX && y > prevY) {
+                        ops.push({ type: 'equal', a: x - 1, b: y - 1 });
+                        x--;
+                        y--;
+                    }
+                    if (d > 0) {
+                        if (x === prevX) {
+                            ops.push({ type: 'add', b: y - 1 });
+                        } else {
+                            ops.push({ type: 'remove', a: x - 1 });
+                        }
+                    }
+                    x = prevX;
+                    y = prevY;
+                }
+                return ops.reverse();
+            }
+
+            function toBlocks(ops, a, b) {
+                const blocks = [];
+                for (const op of ops) {
+                    const value = op.type === 'add' ? b[op.b] : a[op.a];
+                    const last = blocks[blocks.length - 1];
+                    if (last && last.type === op.type) {
+                        last.items.push(value);
+                    } else {
+                        blocks.push({ type: op.type, items: [value] });
+                    }
+                }
+                return blocks;
+            }
+
+            /**
+             * Group consecutive non-equal blocks into "hunks" (changed regions),
+             * and record the 1-based line number each hunk starts at in both the
+             * original and modified text. Also returns a parallel array mapping
+             * each block index to its hunk index (or -1 for equal blocks), used
+             * to tag rendered DOM nodes so Prev/Next can find and scroll to them.
+             */
+            function buildHunks(blocks, granularity) {
+                const hunks = [];
+                const blockHunk = new Array(blocks.length).fill(-1);
+                let origLine = 1,
+                    modLine = 1;
+                let i = 0;
+                while (i < blocks.length) {
+                    const block = blocks[i];
+                    if (block.type === 'equal') {
+                        const advance = granularity === 'line' ? block.items.length : block.items.filter(t => t === '\n')
+                        .length;
+                        origLine += advance;
+                        modLine += advance;
+                        i++;
+                        continue;
+                    }
+                    const hunkIndex = hunks.length;
+                    const startOrig = origLine,
+                        startMod = modLine;
+                    while (i < blocks.length && blocks[i].type !== 'equal') {
+                        blockHunk[i] = hunkIndex;
+                        const b = blocks[i];
+                        const advance = granularity === 'line' ? b.items.length : b.items.filter(t => t === '\n')
+                        .length;
+                        if (b.type === 'remove') origLine += advance;
+                        else modLine += advance;
+                        i++;
+                    }
+                    hunks.push({ origLine: startOrig, modLine: startMod });
+                }
+                return { hunks, blockHunk };
+            }
+
+            /* ================================================================
+               2. TOKENIZERS
+               ================================================================ */
+
+            function toLines(text) {
+                if (text === '') return [];
+                const parts = text.split('\n');
+                return parts.map((line, i) => i < parts.length - 1 ? line + '\n' : line);
+            }
+
+            function toWords(text) {
+                if (text === '') return [];
+                return text.match(/\n|[^\S\n]+|[^\s]+/g) || [];
+            }
+
+            /* ================================================================
+               3. APP STATE + LOCAL PERSISTENCE
+               ================================================================ */
+
+            const STORAGE_KEY = 'diffcheck-prefs-v3';
+
+            function loadPrefs() {
+                try {
+                    const raw = localStorage.getItem(STORAGE_KEY);
+                    return raw ? JSON.parse(raw) : {};
+                } catch (e) {
+                    return {};
+                }
+            }
+
+            function savePrefs(prefs) {
+                try { localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs)); } catch (e) { /* storage unavailable — fail silently */ }
+            }
+
+            const prefs = loadPrefs();
+
+            const state = {
+                granularity: prefs.granularity === 'word' ? 'word' : 'line',
+                view: prefs.view === 'inline' ? 'inline' : 'split', // default split
+                theme: prefs.theme === 'dark' ? 'dark' : 'light',
+                autoCompare: prefs.autoCompare !== undefined ? !!prefs.autoCompare : true, // ON by default
+                fontSize: typeof prefs.fontSize === 'number' ? prefs.fontSize : 14,
+                editorHeight: typeof prefs.editorHeight === 'number' ? prefs.editorHeight : 360,
+                lastBlocks: null, // most recently computed diff blocks
+                lastGranularity: null, // granularity used to compute lastBlocks
+                hunks: [], // changed regions for the current comparison
+                currentHunk: -1 // index into hunks currently focused, -1 = none
+            };
+
+            /* ================================================================
+               4. DOM REFERENCES
+               ================================================================ */
+
+            const el = {
+                originalText: document.getElementById('originalText'),
+                modifiedText: document.getElementById('modifiedText'),
+                originalHighlightInner: document.getElementById('originalHighlightInner'),
+                modifiedHighlightInner: document.getElementById('modifiedHighlightInner'),
+                originalLineNumbersInner: document.getElementById('originalLineNumbersInner'),
+                modifiedLineNumbersInner: document.getElementById('modifiedLineNumbersInner'),
+                leftMeta: document.getElementById('leftMeta'),
+                rightMeta: document.getElementById('rightMeta'),
+                compareBtn: document.getElementById('compareBtn'),
+                clearBtn: document.getElementById('clearBtn'),
+                autoCompareToggle: document.getElementById('autoCompareToggle'),
+                granularitySegment: document.getElementById('granularitySegment'),
+                viewSegment: document.getElementById('viewSegment'),
+                fontDec: document.getElementById('fontDec'),
+                fontInc: document.getElementById('fontInc'),
+                themeToggle: document.getElementById('themeToggle'),
+                statBar: document.getElementById('statBar'),
+                statNumbers: document.getElementById('statNumbers'),
+                copyBtn: document.getElementById('copyBtn'),
+                hunkPrev: document.getElementById('hunkPrev'),
+                hunkNext: document.getElementById('hunkNext'),
+                hunkCounter: document.getElementById('hunkCounter'),
+                diffOutput: document.getElementById('diffOutput'),
+                editorsResizer: document.getElementById('editorsResizer')
+            };
+
+            /* ================================================================
+               5. LINE NUMBERS + SCROLL SYNC (editor overlay)
+               Each textarea has wrap="off" so every logical line is exactly one
+               visual row — that keeps the number gutter trivially aligned
+               without needing to measure wrapped-line heights.
+               ================================================================ */
+
+            function updateLineNumbers(textarea, inner) {
+                const count = textarea.value.split('\n').length;
+                let out = '';
+                for (let i = 1; i <= count; i++) out += (i === count ? i : i + '\n');
+                inner.textContent = out;
+            }
+
+            function syncScroll(textarea, highlightInner, lineNumbersInner) {
+                const top = textarea.scrollTop;
+                const left = textarea.scrollLeft;
+                highlightInner.style.transform = 'translate(' + (-left) + 'px,' + (-top) + 'px)';
+                lineNumbersInner.style.transform = 'translateY(' + (-top) + 'px)';
+            }
+
+            /* ================================================================
+               6. TEXTAREA OVERLAY RENDERING
+               ================================================================ */
+
+            function mirrorPlain(text, inner) {
+                inner.textContent = text.length ? text : '\u200b';
+            }
+
+            function buildHighlightFragment(blocks, blockHunk, side) {
+                const frag = document.createDocumentFragment();
+                for (let i = 0; i < blocks.length; i++) {
+                    const block = blocks[i];
+                    if (side === 'left' && block.type === 'add') continue;
+                    if (side === 'right' && block.type === 'remove') continue;
+                    const text = block.items.join('');
+                    if (block.type === 'equal') {
+                        frag.appendChild(document.createTextNode(text));
+                    } else {
+                        const span = document.createElement('span');
+                        span.className = block.type === 'add' ? 'ov-add' : 'ov-remove';
+                        if (blockHunk[i] >= 0) span.dataset.hunk = blockHunk[i];
+                        span.textContent = text;
+                        frag.appendChild(span);
+                    }
+                }
+                return frag;
+            }
+
+            function applyEditorHighlighting(blocks, blockHunk) {
+                el.originalHighlightInner.innerHTML = '';
+                el.modifiedHighlightInner.innerHTML = '';
+                el.originalHighlightInner.appendChild(buildHighlightFragment(blocks, blockHunk, 'left'));
+                el.modifiedHighlightInner.appendChild(buildHighlightFragment(blocks, blockHunk, 'right'));
+            }
+
+            function revertToPlain() {
+                mirrorPlain(el.originalText.value, el.originalHighlightInner);
+                mirrorPlain(el.modifiedText.value, el.modifiedHighlightInner);
+            }
+
+            /* ================================================================
+               7. DIFF RESULTS PANEL (side-by-side, below the editors)
+               ================================================================ */
+
+            function makeLineRow(type, text, lineNumber, hunkIdx) {
+                const row = document.createElement('div');
+                row.className = 'line-row type-' + type;
+                if (hunkIdx >= 0) row.dataset.hunk = hunkIdx;
+                const gutter = document.createElement('span');
+                gutter.className = 'line-gutter';
+                gutter.textContent = lineNumber;
+                const content = document.createElement('span');
+                content.className = 'line-content';
+                content.textContent = text.endsWith('\n') ? text.slice(0, -1) : text;
+                if (content.textContent === '') content.innerHTML = '&nbsp;';
+                row.appendChild(gutter);
+                row.appendChild(content);
+                return row;
+            }
+
+            function makeInlineLineRow(type, text, hunkIdx) {
+                const row = document.createElement('div');
+                row.className = 'line-row type-' + type;
+                if (hunkIdx >= 0) row.dataset.hunk = hunkIdx;
+                const gutter = document.createElement('span');
+                gutter.className = 'line-gutter';
+                gutter.textContent = type === 'add' ? '+' : type === 'remove' ? '−' : ' ';
+                const content = document.createElement('span');
+                content.className = 'line-content';
+                content.textContent = text.endsWith('\n') ? text.slice(0, -1) : text;
+                if (content.textContent === '') content.innerHTML = '&nbsp;';
+                row.appendChild(gutter);
+                row.appendChild(content);
+                return row;
+            }
+
+            function appendWordSpan(container, type, text, hunkIdx) {
+                if (type === 'equal') {
+                    container.appendChild(document.createTextNode(text));
+                    return;
+                }
+                const span = document.createElement('span');
+                span.className = type === 'add' ? 'tok-add' : 'tok-remove';
+                if (hunkIdx >= 0) span.dataset.hunk = hunkIdx;
+                span.textContent = text;
+                container.appendChild(span);
+            }
+
+            // Aligned side-by-side table for line granularity
+            function renderSplitLine(blocks, blockHunk, leftContainer, rightContainer) {
+                const leftFrag = document.createDocumentFragment();
+                const rightFrag = document.createDocumentFragment();
+                let origLine = 1,
+                    modLine = 1;
+                let i = 0;
+                while (i < blocks.length) {
+                    const block = blocks[i];
+                    if (block.type === 'equal') {
+                        for (const line of block.items) {
+                            leftFrag.appendChild(makeLineRow('equal', line, origLine, -1));
+                            rightFrag.appendChild(makeLineRow('equal', line, modLine, -1));
+                            origLine++;
+                            modLine++;
+                        }
+                        i++;
+                        continue;
+                    }
+                    if (block.type === 'remove') {
+                        const removedItems = block.items;
+                        const addedBlock = (blocks[i + 1] && blocks[i + 1].type === 'add') ? blocks[i + 1] : null;
+                        const addedItems = addedBlock ? addedBlock.items : [];
+                        const hunkIdx = blockHunk[i];
+                        const pairCount = Math.min(removedItems.length, addedItems.length);
+                        for (let p = 0; p < pairCount; p++) {
+                            leftFrag.appendChild(makeLineRow('remove', removedItems[p], origLine, hunkIdx));
+                            rightFrag.appendChild(makeLineRow('add', addedItems[p], modLine, hunkIdx));
+                            origLine++;
+                            modLine++;
+                        }
+                        for (let p = pairCount; p < removedItems.length; p++) {
+                            leftFrag.appendChild(makeLineRow('remove', removedItems[p], origLine, hunkIdx));
+                            origLine++;
+                        }
+                        for (let p = pairCount; p < addedItems.length; p++) {
+                            rightFrag.appendChild(makeLineRow('add', addedItems[p], modLine, hunkIdx));
+                            modLine++;
+                        }
+                        i += addedBlock ? 2 : 1;
+                        continue;
+                    }
+                    if (block.type === 'add') {
+                        const hunkIdx = blockHunk[i];
+                        for (const line of block.items) {
+                            rightFrag.appendChild(makeLineRow('add', line, modLine, hunkIdx));
+                            modLine++;
+                        }
+                        i++;
+                        continue;
+                    }
+                    i++;
+                }
+                leftContainer.appendChild(leftFrag);
+                rightContainer.appendChild(rightFrag);
+            }
+
+            // Inline (unified) view for line granularity
+            function renderInlineLine(blocks, blockHunk, container) {
+                const frag = document.createDocumentFragment();
+                let lineNum = 1;
+                for (let i = 0; i < blocks.length; i++) {
+                    const block = blocks[i];
+                    const hunkIdx = blockHunk[i];
+                    if (block.type === 'equal') {
+                        for (const line of block.items) {
+                            frag.appendChild(makeInlineLineRow('equal', line, -1));
+                            lineNum++;
+                        }
+                    } else if (block.type === 'remove') {
+                        const removedItems = block.items;
+                        const addedBlock = (blocks[i + 1] && blocks[i + 1].type === 'add') ? blocks[i + 1] : null;
+                        const addedItems = addedBlock ? addedBlock.items : [];
+                        const pairCount = Math.min(removedItems.length, addedItems.length);
+                        for (let p = 0; p < pairCount; p++) {
+                            frag.appendChild(makeInlineLineRow('remove', removedItems[p], hunkIdx));
+                            frag.appendChild(makeInlineLineRow('add', addedItems[p], hunkIdx));
+                            lineNum++;
+                        }
+                        for (let p = pairCount; p < removedItems.length; p++) {
+                            frag.appendChild(makeInlineLineRow('remove', removedItems[p], hunkIdx));
+                            lineNum++;
+                        }
+                        for (let p = pairCount; p < addedItems.length; p++) {
+                            frag.appendChild(makeInlineLineRow('add', addedItems[p], hunkIdx));
+                            lineNum++;
+                        }
+                        i += addedBlock ? 2 : 1;
+                        continue;
+                    } else if (block.type === 'add') {
+                        const hunkIdx = blockHunk[i];
+                        for (const line of block.items) {
+                            frag.appendChild(makeInlineLineRow('add', line, hunkIdx));
+                            lineNum++;
+                        }
+                        i++;
+                        continue;
+                    }
+                }
+                container.appendChild(frag);
+            }
+
+            // Side-by-side for word granularity
+            function renderSplitWord(blocks, blockHunk, leftContainer, rightContainer) {
+                const leftWrap = document.createElement('div');
+                leftWrap.className = 'words-flow';
+                const rightWrap = document.createElement('div');
+                rightWrap.className = 'words-flow';
+
+                for (let i = 0; i < blocks.length; i++) {
+                    const block = blocks[i];
+                    const text = block.items.join('');
+                    if (block.type === 'equal') {
+                        leftWrap.appendChild(document.createTextNode(text));
+                        rightWrap.appendChild(document.createTextNode(text));
+                    } else if (block.type === 'remove') {
+                        appendWordSpan(leftWrap, 'remove', text, blockHunk[i]);
+                    } else if (block.type === 'add') {
+                        appendWordSpan(rightWrap, 'add', text, blockHunk[i]);
+                    }
+                }
+                leftContainer.appendChild(leftWrap);
+                rightContainer.appendChild(rightWrap);
+            }
+
+            // Inline (unified) view for word granularity
+            function renderInlineWord(blocks, blockHunk, container) {
+                const wrap = document.createElement('div');
+                wrap.className = 'inline-view';
+                for (let i = 0; i < blocks.length; i++) {
+                    const block = blocks[i];
+                    const text = block.items.join('');
+                    if (block.type === 'equal') {
+                        wrap.appendChild(document.createTextNode(text));
+                    } else if (block.type === 'remove') {
+                        appendWordSpan(wrap, 'remove', text, blockHunk[i]);
+                    } else if (block.type === 'add') {
+                        appendWordSpan(wrap, 'add', text, blockHunk[i]);
+                    }
+                }
+                container.appendChild(wrap);
+            }
+
+            function renderResultsPanel(blocks, blockHunk) {
+                el.diffOutput.innerHTML = '';
+
+                if (!blocks) {
+                    const p = document.createElement('p');
+                    p.className = 'empty-state';
+                    p.textContent =
+                        'Paste text on both sides, then click Compare (or press Ctrl+Enter) to see a side-by-side diff here.';
+                    el.diffOutput.appendChild(p);
+                    return;
+                }
+
+                if (blocks.length === 0 || (blocks.length === 1 && blocks[0].type === 'equal')) {
+                    const p = document.createElement('p');
+                    p.className = 'empty-state';
+                    p.textContent = 'No differences found — the two texts are identical.';
+                    el.diffOutput.appendChild(p);
+                    return;
+                }
+
+                const isSplit = state.view === 'split';
+
+                if (isSplit) {
+                    const split = document.createElement('div');
+                    split.className = 'split-view';
+
+                    const leftCol = document.createElement('div');
+                    leftCol.className = 'split-col';
+                    const leftHeader = document.createElement('div');
+                    leftHeader.className = 'split-col-header';
+                    leftHeader.textContent = 'Original';
+                    leftCol.appendChild(leftHeader);
+
+                    const rightCol = document.createElement('div');
+                    rightCol.className = 'split-col';
+                    const rightHeader = document.createElement('div');
+                    rightHeader.className = 'split-col-header';
+                    rightHeader.textContent = 'Modified';
+                    rightCol.appendChild(rightHeader);
+
+                    split.appendChild(leftCol);
+                    split.appendChild(rightCol);
+                    el.diffOutput.appendChild(split);
+
+                    if (state.lastGranularity === 'line') {
+                        renderSplitLine(blocks, blockHunk, leftCol, rightCol);
+                    } else {
+                        leftCol.classList.add('words-flow');
+                        rightCol.classList.add('words-flow');
+                        renderSplitWord(blocks, blockHunk, leftCol, rightCol);
+                    }
+                } else {
+                    // Inline view
+                    const wrap = document.createElement('div');
+                    wrap.className = 'inline-view';
+                    el.diffOutput.appendChild(wrap);
+                    if (state.lastGranularity === 'line') {
+                        renderInlineLine(blocks, blockHunk, wrap);
+                    } else {
+                        renderInlineWord(blocks, blockHunk, wrap);
+                    }
+                }
+            }
+
+            /* ================================================================
+               8. STATS BAR
+               ================================================================ */
+
+            function countMeta(text) {
+                if (text === '') return '0 lines · 0 chars';
+                const lines = text.split('\n').length;
+                return lines + ' lines · ' + text.length + ' chars';
+            }
+
+            function updateMeta() {
+                el.leftMeta.textContent = countMeta(el.originalText.value);
+                el.rightMeta.textContent = countMeta(el.modifiedText.value);
+            }
+
+            function computeStats(blocks) {
+                let added = 0,
+                    removed = 0,
+                    unchanged = 0;
+                for (const block of blocks) {
+                    const count = state.lastGranularity === 'line' ?
+                        block.items.length :
+                        block.items.filter(t => t.trim() !== '').length;
+                    if (block.type === 'add') added += count;
+                    else if (block.type === 'remove') removed += count;
+                    else unchanged += count;
+                }
+                return { added, removed, unchanged };
+            }
+
+            function renderStats() {
+                const blocks = state.lastBlocks;
+                if (!blocks) {
+                    el.statBar.innerHTML = '';
+                    el.statNumbers.textContent = 'No comparison yet';
+                    el.copyBtn.disabled = true;
+                    return;
+                }
+                el.copyBtn.disabled = false;
+                const stats = computeStats(blocks);
+                const total = stats.added + stats.removed + stats.unchanged;
+                el.statBar.innerHTML = '';
+                if (total === 0 || (stats.added === 0 && stats.removed === 0)) {
+                    el.statNumbers.textContent = 'No differences — texts are identical';
+                    return;
+                }
+                const segs = [
+                    ['seg-remove', stats.removed],
+                    ['seg-add', stats.added],
+                    ['seg-equal', stats.unchanged]
+                ];
+                for (const [cls, count] of segs) {
+                    if (count <= 0) continue;
+                    const seg = document.createElement('div');
+                    seg.className = cls;
+                    seg.style.width = (count / total * 100) + '%';
+                    el.statBar.appendChild(seg);
+                }
+                const unit = state.lastGranularity === 'line' ? 'line' : 'word';
+                el.statNumbers.innerHTML =
+                    '<span class="n-add">+' + stats.added + '</span> ' + unit + (stats.added === 1 ? '' : 's') +
+                    ' added · ' +
+                    '<span class="n-remove">-' + stats.removed + '</span> ' + unit + (stats.removed === 1 ? '' : 's') +
+                    ' removed';
+            }
+
+            /* ================================================================
+               9. HUNK NAVIGATION (Prev / Next) – now focuses ONLY on the diff panel
+               ================================================================ */
+
+            function clearActiveHunkMarks() {
+                document.querySelectorAll('.active-hunk').forEach(function(elm) { elm.classList.remove('active-hunk'); });
+            }
+
+            function updateHunkNavUI() {
+                const has = state.hunks.length > 0;
+                el.hunkPrev.disabled = !has;
+                el.hunkNext.disabled = !has;
+                if (!has) {
+                    el.hunkCounter.textContent = 'No changes';
+                } else if (state.currentHunk === -1) {
+                    el.hunkCounter.textContent = state.hunks.length + ' change' + (state.hunks.length === 1 ? '' : 's');
+                } else {
+                    el.hunkCounter.textContent = 'Change ' + (state.currentHunk + 1) + ' of ' + state.hunks.length;
+                }
+            }
+
+            function focusHunk(n) {
+                clearActiveHunkMarks();
+                const hunk = state.hunks[n];
+                if (!hunk) return;
+
+                // Find all elements in the diff panel that belong to this hunk
+                const marks = document.querySelectorAll('[data-hunk="' + n + '"]');
+                marks.forEach(function(m) { m.classList.add('active-hunk'); });
+
+                if (marks.length) {
+                    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)')
+                    .matches;
+                    // Scroll the first matching element (in the diff panel) into view
+                    marks[0].scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+                }
+
+                // Update the counter
+                updateHunkNavUI();
+            }
+
+            function goToHunk(delta) {
+                if (state.hunks.length === 0) return;
+                const count = state.hunks.length;
+                if (state.currentHunk === -1) {
+                    state.currentHunk = delta > 0 ? 0 : count - 1;
+                } else {
+                    state.currentHunk = ((state.currentHunk + delta) % count + count) % count;
+                }
+                focusHunk(state.currentHunk);
+            }
+
+            function resetHunkNav() {
+                state.hunks = [];
+                state.currentHunk = -1;
+                clearActiveHunkMarks();
+                updateHunkNavUI();
+            }
+
+            /* ================================================================
+               10. COMPARE / CLEAR
+               ================================================================ */
+
+            function runCompare() {
+                const originalText = el.originalText.value;
+                const modifiedText = el.modifiedText.value;
+
+                el.compareBtn.textContent = 'Comparing…';
+                el.compareBtn.disabled = true;
+
+                setTimeout(function() {
+                    const tokenize = state.granularity === 'line' ? toLines : toWords;
+                    const aTokens = tokenize(originalText);
+                    const bTokens = tokenize(modifiedText);
+                    const ops = diffArrays(aTokens, bTokens);
+                    const blocks = toBlocks(ops, aTokens, bTokens);
+                    const { hunks, blockHunk } = buildHunks(blocks, state.granularity);
+
+                    state.lastBlocks = blocks;
+                    state.lastGranularity = state.granularity;
+                    state.hunks = hunks;
+                    state.currentHunk = -1;
+
+                    renderStats();
+                    applyEditorHighlighting(blocks, blockHunk);
+                    renderResultsPanel(blocks, blockHunk);
+                    updateHunkNavUI();
+
+                    el.compareBtn.textContent = 'Compare';
+                    el.compareBtn.disabled = false;
+                }, 0);
+            }
+
+            function clearAll() {
+                el.originalText.value = '';
+                el.modifiedText.value = '';
+                updateMeta();
+                updateLineNumbers(el.originalText, el.originalLineNumbersInner);
+                updateLineNumbers(el.modifiedText, el.modifiedLineNumbersInner);
+                state.lastBlocks = null;
+                state.lastGranularity = null;
+                renderStats();
+                revertToPlain();
+                renderResultsPanel(null, null);
+                resetHunkNav();
+                el.originalText.focus();
+            }
+
+            /* ================================================================
+               11. COPY RESULT
+               ================================================================ */
+
+            function buildPlainTextDiff() {
+                const blocks = state.lastBlocks;
+                if (!blocks) return '';
+                if (state.lastGranularity === 'line') {
+                    let out = '';
+                    for (const block of blocks) {
+                        const prefix = block.type === 'add' ? '+ ' : block.type === 'remove' ? '- ' : '  ';
+                        for (const line of block.items) {
+                            out += prefix + (line.endsWith('\n') ? line.slice(0, -1) : line) + '\n';
+                        }
+                    }
+                    return out;
+                }
+                let out = '';
+                for (const block of blocks) {
+                    for (const tok of block.items) {
+                        if (block.type === 'add') out += '{+' + tok + '+}';
+                        else if (block.type === 'remove') out += '[-' + tok + '-]';
+                        else out += tok;
+                    }
+                }
+                return out;
+            }
+
+            function copyResult() {
+                const text = buildPlainTextDiff();
+                if (!text) return;
+
+                function fallbackCopy() {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try { document.execCommand('copy');
+                        flashCopyButton(); } catch (e) { flashCopyButton('Copy failed'); }
+                    document.body.removeChild(ta);
+                }
+
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(
+                        function() { flashCopyButton(); },
+                        fallbackCopy
+                    );
+                } else {
+                    fallbackCopy();
+                }
+            }
+
+            function flashCopyButton(label) {
+                const original = 'Copy diff as text';
+                el.copyBtn.textContent = label || 'Copied!';
+                setTimeout(function() { el.copyBtn.textContent = original; }, 1400);
+            }
+
+            /* ================================================================
+               12. UI WIRING
+               ================================================================ */
+
+            function setGranularity(value) {
+                state.granularity = value;
+                prefs.granularity = value;
+                savePrefs(prefs);
+                [...el.granularitySegment.children].forEach(function(btn) {
+                    btn.classList.toggle('active', btn.dataset.value === value);
+                });
+                if (state.lastBlocks) runCompare();
+            }
+
+            function setView(value) {
+                state.view = value;
+                prefs.view = value;
+                savePrefs(prefs);
+                [...el.viewSegment.children].forEach(function(btn) {
+                    btn.classList.toggle('active', btn.dataset.value === value);
+                });
+                // Re-render the results panel if we have blocks
+                if (state.lastBlocks) {
+                    const { blockHunk } = buildHunks(state.lastBlocks, state.lastGranularity || 'line');
+                    renderResultsPanel(state.lastBlocks, blockHunk);
+                    // Re-apply active hunk if any
+                    if (state.currentHunk >= 0) focusHunk(state.currentHunk);
+                }
+            }
+
+            function applyTheme() {
+                document.documentElement.setAttribute('data-theme', state.theme);
+                el.themeToggle.textContent = state.theme === 'dark' ? '☀' : '◐';
+            }
+
+            function toggleTheme() {
+                state.theme = state.theme === 'dark' ? 'light' : 'dark';
+                prefs.theme = state.theme;
+                savePrefs(prefs);
+                applyTheme();
+            }
+
+            function applyFontSize() {
+                document.documentElement.style.setProperty('--content-font-size', state.fontSize + 'px');
+            }
+
+            function adjustFontSize(delta) {
+                state.fontSize = Math.max(11, Math.min(22, state.fontSize + delta));
+                prefs.fontSize = state.fontSize;
+                savePrefs(prefs);
+                applyFontSize();
+            }
+
+            function applyEditorHeight() {
+                document.documentElement.style.setProperty('--editor-height', state.editorHeight + 'px');
+            }
+
+            let autoCompareTimer = null;
+
+            function scheduleAutoCompare() {
+                if (!state.autoCompare) return;
+                clearTimeout(autoCompareTimer);
+                autoCompareTimer = setTimeout(runCompare, 450);
+            }
+
+            function handleTextInput(textarea, highlightInner, lineNumbersInner) {
+                updateMeta();
+                updateLineNumbers(textarea, lineNumbersInner);
+                if (state.lastBlocks) {
+                    state.lastBlocks = null;
+                    renderStats();
+                    renderResultsPanel(null, null);
+                    resetHunkNav();
+                }
+                mirrorPlain(textarea.value, highlightInner);
+                scheduleAutoCompare();
+            }
+
+            /* ================================================================
+               13. EVENT LISTENERS
+               ================================================================ */
+
+            el.compareBtn.addEventListener('click', runCompare);
+            el.clearBtn.addEventListener('click', clearAll);
+            el.copyBtn.addEventListener('click', copyResult);
+            el.hunkPrev.addEventListener('click', function() { goToHunk(-1); });
+            el.hunkNext.addEventListener('click', function() { goToHunk(1); });
+
+            el.originalText.addEventListener('input', function() {
+                handleTextInput(el.originalText, el.originalHighlightInner, el.originalLineNumbersInner);
+            });
+            el.modifiedText.addEventListener('input', function() {
+                handleTextInput(el.modifiedText, el.modifiedHighlightInner, el.modifiedLineNumbersInner);
+            });
+
+            el.originalText.addEventListener('scroll', function() {
+                syncScroll(el.originalText, el.originalHighlightInner, el.originalLineNumbersInner);
+            });
+            el.modifiedText.addEventListener('scroll', function() {
+                syncScroll(el.modifiedText, el.modifiedHighlightInner, el.modifiedLineNumbersInner);
+            });
+
+            el.autoCompareToggle.addEventListener('change', function(e) {
+                state.autoCompare = e.target.checked;
+                prefs.autoCompare = state.autoCompare;
+                savePrefs(prefs);
+            });
+
+            el.granularitySegment.addEventListener('click', function(e) {
+                const btn = e.target.closest('.segmented-btn');
+                if (btn) setGranularity(btn.dataset.value);
+            });
+
+            el.viewSegment.addEventListener('click', function(e) {
+                const btn = e.target.closest('.segmented-btn');
+                if (btn) setView(btn.dataset.value);
+            });
+
+            el.fontDec.addEventListener('click', function() { adjustFontSize(-1); });
+            el.fontInc.addEventListener('click', function() { adjustFontSize(1); });
+            el.themeToggle.addEventListener('click', toggleTheme);
+
+            (function initResizer() {
+                let dragging = false,
+                    startY = 0,
+                    startHeight = 0;
+                el.editorsResizer.addEventListener('mousedown', function(e) {
+                    dragging = true;
+                    startY = e.clientY;
+                    startHeight = state.editorHeight;
+                    document.body.style.userSelect = 'none';
+                });
+                window.addEventListener('mousemove', function(e) {
+                    if (!dragging) return;
+                    const delta = e.clientY - startY;
+                    state.editorHeight = Math.max(160, Math.min(900, startHeight + delta));
+                    applyEditorHeight();
+                });
+                window.addEventListener('mouseup', function() {
+                    if (!dragging) return;
+                    dragging = false;
+                    document.body.style.userSelect = '';
+                    prefs.editorHeight = state.editorHeight;
+                    savePrefs(prefs);
+                });
+            })();
+
+            document.addEventListener('keydown', function(e) {
+                const ctrlOrCmd = e.ctrlKey || e.metaKey;
+                if (ctrlOrCmd && e.key === 'Enter') {
+                    e.preventDefault();
+                    runCompare();
+                } else if (ctrlOrCmd && (e.key === 'l' || e.key === 'L')) {
+                    e.preventDefault();
+                    clearAll();
+                }
+            });
+
+            /* ================================================================
+               14. INIT
+               ================================================================ */
+
+            function init() {
+                applyTheme();
+                applyFontSize();
+                applyEditorHeight();
+                el.autoCompareToggle.checked = state.autoCompare;
+                setGranularity(state.granularity);
+                setView(state.view);
+                updateMeta();
+                updateLineNumbers(el.originalText, el.originalLineNumbersInner);
+                updateLineNumbers(el.modifiedText, el.modifiedLineNumbersInner);
+                revertToPlain();
+                renderStats();
+                renderResultsPanel(null, null);
+                updateHunkNavUI();
+
+                // Auto-compare on load if there's content
+                if (el.originalText.value.trim() || el.modifiedText.value.trim()) {
+                    if (state.autoCompare) {
+                        setTimeout(runCompare, 300);
+                    }
+                }
+            }
+
+            init();
+        })();
+    </script>
+</body>
+</html>
