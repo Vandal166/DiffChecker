@@ -12,6 +12,8 @@
      Modified side-by-side comparison with its own line numbers.
   Prev/Next buttons jump between changed regions ("hunks") inside the
   diff panel (and no longer scroll the editors).
+  Drag & drop: drop a text file (.txt, .md, .json, .js, .css, .html, etc.)
+  onto either editor to load its content.
   See the comments in the script block below for how it all fits together.
 -->
 <html lang="en" data-theme="light">
@@ -320,6 +322,11 @@
             border-radius: var(--radius);
             overflow: hidden;
             box-shadow: var(--shadow);
+            transition: border-color .2s, box-shadow .2s;
+        }
+        .editor-pane.drag-over {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent);
         }
         .pane-header {
             display: flex;
@@ -671,23 +678,23 @@
     <main class="app">
 
         <section class="editors">
-            <div class="editor-pane">
+            <div class="editor-pane" id="originalPane">
                 <div class="pane-header">Original text <span class="pane-meta" id="leftMeta"></span></div>
                 <div class="editor-body">
                     <div class="line-numbers" id="originalLineNumbers"><div class="line-numbers-inner" id="originalLineNumbersInner">1</div></div>
                     <div class="editor-scroll">
                         <div class="highlight-layer" id="originalHighlight"><div class="highlight-layer-inner" id="originalHighlightInner"></div></div>
-                        <textarea id="originalText" spellcheck="false" wrap="off" placeholder="Paste or type the original text…"></textarea>
+                        <textarea id="originalText" spellcheck="false" wrap="off" placeholder="Paste or type the modified text or drag and drop an file..."></textarea>
                     </div>
                 </div>
             </div>
-            <div class="editor-pane">
+            <div class="editor-pane" id="modifiedPane">
                 <div class="pane-header">Modified text <span class="pane-meta" id="rightMeta"></span></div>
                 <div class="editor-body">
                     <div class="line-numbers" id="modifiedLineNumbers"><div class="line-numbers-inner" id="modifiedLineNumbersInner">1</div></div>
                     <div class="editor-scroll">
                         <div class="highlight-layer" id="modifiedHighlight"><div class="highlight-layer-inner" id="modifiedHighlightInner"></div></div>
-                        <textarea id="modifiedText" spellcheck="false" wrap="off" placeholder="Paste or type the modified text…"></textarea>
+                        <textarea id="modifiedText" spellcheck="false" wrap="off" placeholder="Paste or type the modified text or drag and drop an file..."></textarea>
                     </div>
                 </div>
             </div>
@@ -925,7 +932,9 @@
                 hunkNext: document.getElementById('hunkNext'),
                 hunkCounter: document.getElementById('hunkCounter'),
                 diffOutput: document.getElementById('diffOutput'),
-                editorsResizer: document.getElementById('editorsResizer')
+                editorsResizer: document.getElementById('editorsResizer'),
+                originalPane: document.getElementById('originalPane'),
+                modifiedPane: document.getElementById('modifiedPane')
             };
 
             /* ================================================================
@@ -1557,7 +1566,70 @@
             }
 
             /* ================================================================
-               13. EVENT LISTENERS
+               13. DRAG & DROP SUPPORT
+               ================================================================ */
+
+            function setupDragDrop(textarea, pane) {
+                // Prevent default to allow drop
+                textarea.addEventListener('dragover', function(e) {
+                    e.preventDefault();
+                    pane.classList.add('drag-over');
+                });
+
+                textarea.addEventListener('dragleave', function(e) {
+                    // Only remove if we're actually leaving the pane
+                    // The relatedTarget check helps avoid flicker when moving over children
+                    const related = e.relatedTarget;
+                    if (!pane.contains(related)) {
+                        pane.classList.remove('drag-over');
+                    }
+                });
+
+                textarea.addEventListener('drop', function(e) {
+                    e.preventDefault();
+                    pane.classList.remove('drag-over');
+
+                    const files = e.dataTransfer.files;
+                    if (files.length === 0) return;
+                    const file = files[0];
+
+                    // Check if it's a text file (by MIME type or extension)
+                    const type = file.type;
+                    const name = file.name.toLowerCase();
+                    const allowed = type.startsWith('text/') ||
+                        name.endsWith('.txt') || name.endsWith('.md') ||
+                        name.endsWith('.markdown') || name.endsWith('.log') ||
+                        name.endsWith('.json') || name.endsWith('.js') ||
+                        name.endsWith('.css') || name.endsWith('.html') ||
+                        name.endsWith('.xml') || name.endsWith('.csv') ||
+                        name.endsWith('.yml') || name.endsWith('.yaml') ||
+                        name.endsWith('.toml') || name.endsWith('.ini') ||
+                        name.endsWith('.sh') || name.endsWith('.bash') ||
+                        name.endsWith('.py') || name.endsWith('.rb') ||
+                        name.endsWith('.go') || name.endsWith('.rs') ||
+                        name.endsWith('.java') || name.endsWith('.c') ||
+                        name.endsWith('.cpp') || name.endsWith('.h') ||
+                        name.endsWith('.ts') || name.endsWith('.tsx') ||
+                        name.endsWith('.jsx') || name.endsWith('.vue') ||
+                        name.endsWith('.svelte') || name.endsWith('.lua') ||
+                        name.endsWith('.r') || name.endsWith('.swift');
+
+                    if (allowed) {
+                        const reader = new FileReader();
+                        reader.onload = function(ev) {
+                            textarea.value = ev.target.result;
+                            // Trigger input event to update everything
+                            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                        };
+                        reader.readAsText(file);
+                    } else {
+                        // Optional: show a brief message? For now, just ignore.
+                    }
+                });
+            }
+
+            /* ================================================================
+               14. EVENT LISTENERS
                ================================================================ */
 
             el.compareBtn.addEventListener('click', runCompare);
@@ -1637,7 +1709,7 @@
             });
 
             /* ================================================================
-               14. INIT
+               15. INIT
                ================================================================ */
 
             function init() {
@@ -1654,6 +1726,10 @@
                 renderStats();
                 renderResultsPanel(null, null);
                 updateHunkNavUI();
+
+                // Setup drag & drop
+                setupDragDrop(el.originalText, el.originalPane);
+                setupDragDrop(el.modifiedText, el.modifiedPane);
 
                 // Auto-compare on load if there's content
                 if (el.originalText.value.trim() || el.modifiedText.value.trim()) {
