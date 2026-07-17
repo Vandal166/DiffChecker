@@ -315,6 +315,7 @@
             gap: 14px;
         }
         .editor-pane {
+            position: relative;
             display: flex;
             flex-direction: column;
             background: var(--surface);
@@ -327,6 +328,26 @@
         .editor-pane.drag-over {
             border-color: var(--accent);
             box-shadow: 0 0 0 2px var(--accent);
+        }
+        .drop-reject-msg {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 5;
+            background: var(--remove-bg);
+            color: var(--remove-text);
+            border: 1px solid var(--remove-text);
+            border-radius: var(--radius);
+            padding: 4px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            box-shadow: var(--shadow);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity .15s ease;
+        }
+        .drop-reject-msg.show {
+            opacity: 1;
         }
         .pane-header {
             display: flex;
@@ -1018,6 +1039,24 @@
                 return row;
             }
 
+            // A blank spacer row used in the split view to keep the Original/Modified
+            // columns row-for-row aligned when a hunk removes and adds a different
+            // number of lines (e.g. 2 lines replaced by 3). Without this, every line
+            // below an uneven hunk would drift out of alignment between the columns.
+            function makeFillerRow() {
+                const row = document.createElement('div');
+                row.className = 'line-row type-empty';
+                const gutter = document.createElement('span');
+                gutter.className = 'line-gutter';
+                gutter.innerHTML = '&nbsp;';
+                const content = document.createElement('span');
+                content.className = 'line-content';
+                content.innerHTML = '&nbsp;';
+                row.appendChild(gutter);
+                row.appendChild(content);
+                return row;
+            }
+
             function makeInlineLineRow(type, text, hunkIdx) {
                 const row = document.createElement('div');
                 row.className = 'line-row type-' + type;
@@ -1079,9 +1118,11 @@
                         }
                         for (let p = pairCount; p < removedItems.length; p++) {
                             leftFrag.appendChild(makeLineRow('remove', removedItems[p], origLine, hunkIdx));
+                            rightFrag.appendChild(makeFillerRow());
                             origLine++;
                         }
                         for (let p = pairCount; p < addedItems.length; p++) {
+                            leftFrag.appendChild(makeFillerRow());
                             rightFrag.appendChild(makeLineRow('add', addedItems[p], modLine, hunkIdx));
                             modLine++;
                         }
@@ -1091,6 +1132,7 @@
                     if (block.type === 'add') {
                         const hunkIdx = blockHunk[i];
                         for (const line of block.items) {
+                            leftFrag.appendChild(makeFillerRow());
                             rightFrag.appendChild(makeLineRow('add', line, modLine, hunkIdx));
                             modLine++;
                         }
@@ -1295,8 +1337,17 @@
                 const stats = computeStats(blocks);
                 const total = stats.added + stats.removed + stats.unchanged;
                 el.statBar.innerHTML = '';
-                if (total === 0 || (stats.added === 0 && stats.removed === 0)) {
+                const noBlocksAtAll = blocks.length === 0 || (blocks.length === 1 && blocks[0].type === 'equal');
+                if (noBlocksAtAll) {
                     el.statNumbers.textContent = 'No differences — texts are identical';
+                    return;
+                }
+                if (stats.added === 0 && stats.removed === 0) {
+                    // There ARE changed blocks (e.g. whitespace-only edits at word
+                    // granularity), they just don't count as whole words/lines added
+                    // or removed. Say so instead of falsely claiming "identical" —
+                    // the diff panel below is still showing the change.
+                    el.statNumbers.textContent = 'No word-level differences (whitespace only)';
                     return;
                 }
                 const segs = [
@@ -1569,6 +1620,24 @@
                13. DRAG & DROP SUPPORT
                ================================================================ */
 
+            // Brief, auto-dismissing message shown over a pane when a dropped
+            // file is rejected (wrong type), so the drop doesn't look like it
+            // silently did nothing.
+            function showDropMessage(pane, text) {
+                let msg = pane.querySelector('.drop-reject-msg');
+                if (!msg) {
+                    msg = document.createElement('div');
+                    msg.className = 'drop-reject-msg';
+                    pane.appendChild(msg);
+                }
+                msg.textContent = text;
+                msg.classList.remove('show');
+                void msg.offsetWidth; // force reflow so the fade-in restarts on repeat drops
+                msg.classList.add('show');
+                clearTimeout(msg._hideTimer);
+                msg._hideTimer = setTimeout(function() { msg.classList.remove('show'); }, 2200);
+            }
+
             function setupDragDrop(textarea, pane) {
                 // Prevent default to allow drop
                 textarea.addEventListener('dragover', function(e) {
@@ -1623,7 +1692,7 @@
                         };
                         reader.readAsText(file);
                     } else {
-                        // Optional: show a brief message? For now, just ignore.
+                        showDropMessage(pane, 'Unsupported file type — drop a plain text file instead');
                     }
                 });
             }
