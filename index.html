@@ -44,6 +44,13 @@
             --add-text: #0f5c33;
             --remove-bg: #f8d0d0;
             --remove-text: #8f1d22;
+            /* very subtle full-line wash, used only in Word-granularity view to
+               help a changed line stand out from surrounding unchanged text —
+               kept much lighter than --add-bg/--remove-bg so it doesn't compete
+               with the token-level highlight colors */
+            --add-bg-soft: rgba(15, 92, 51, .06);
+            --remove-bg-soft: rgba(143, 29, 34, .05);
+            --changed-bg-soft: rgba(61, 79, 143, .05);
 
             --radius: 6px;
             --shadow: 0 1px 2px rgba(20, 20, 30, .06), 0 1px 1px rgba(20, 20, 30, .04);
@@ -67,6 +74,9 @@
             --add-text: #74e8a6;
             --remove-bg: #4a1c1e;
             --remove-text: #f79a97;
+            --add-bg-soft: rgba(116, 232, 166, .08);
+            --remove-bg-soft: rgba(247, 154, 151, .07);
+            --changed-bg-soft: rgba(124, 143, 224, .10);
         }
 
         /* ============================================================
@@ -292,6 +302,12 @@
             color: var(--remove-text);
             font-weight: 700;
         }
+        .stat-numbers .fallback-note {
+            display: block;
+            white-space: normal;
+            font-style: italic;
+            margin-top: 2px;
+        }
 
         .hunk-nav {
             display: flex;
@@ -352,7 +368,7 @@
         .pane-header {
             display: flex;
             justify-content: space-between;
-            align-items: baseline;
+            align-items: center;
             padding: 8px 12px;
             background: var(--surface-alt);
             border-bottom: 1px solid var(--border);
@@ -361,6 +377,34 @@
             letter-spacing: .03em;
             text-transform: uppercase;
             color: var(--text-muted);
+        }
+        .pane-header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .pane-actions {
+            display: flex;
+            gap: 2px;
+        }
+        .pane-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 6px;
+            color: var(--text-muted);
+            background: transparent;
+            border-color: transparent;
+        }
+        .pane-icon-btn:hover {
+            background: var(--surface);
+            border-color: var(--border);
+            color: var(--text);
+        }
+        .pane-icon-btn.flash-success {
+            color: var(--add-text);
+            border-color: var(--add-text);
+            background: var(--add-bg);
         }
         .pane-meta {
             font-weight: 400;
@@ -589,6 +633,24 @@
             word-break: break-word;
             padding: 10px 12px;
         }
+        /* One physical line of text in Word-granularity view (split or inline).
+           Full-bleed background lets the very-light tint span the row edge to
+           edge, matching how .line-row's background works in Line-granularity
+           view, so a changed line is easy to spot even when the actual edit
+           is a single small word. */
+        .word-line {
+            margin: 0 -12px;
+            padding: 0 12px;
+        }
+        .word-line.line-changed-add {
+            background: var(--add-bg-soft);
+        }
+        .word-line.line-changed-remove {
+            background: var(--remove-bg-soft);
+        }
+        .word-line.line-changed-both {
+            background: var(--changed-bg-soft);
+        }
 
         /* inline view (unified) */
         .inline-view {
@@ -676,8 +738,8 @@
             </label>
 
             <div class="segmented" id="granularitySegment" role="group" aria-label="Comparison granularity">
-                <button data-value="line" class="segmented-btn active" type="button">Line</button>
-                <button data-value="word" class="segmented-btn" type="button">Word</button>
+                <button data-value="line" class="segmented-btn" type="button">Line</button>
+                <button data-value="word" class="segmented-btn active" type="button">Word</button>
             </div>
 
             <div class="segmented" id="viewSegment" role="group" aria-label="Result layout">
@@ -700,17 +762,43 @@
 
         <section class="editors">
             <div class="editor-pane" id="originalPane">
-                <div class="pane-header">Original text <span class="pane-meta" id="leftMeta"></span></div>
+                <div class="pane-header">
+                    <span class="pane-title">Original text</span>
+                    <div class="pane-header-right">
+                        <span class="pane-meta" id="leftMeta"></span>
+                        <div class="pane-actions">
+                            <button class="pane-icon-btn" id="copyOriginalBtn" type="button" title="Copy original text" aria-label="Copy original text">
+                                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1"></rect><path d="M3 11V3a1 1 0 0 1 1-1h8"></path></svg>
+                            </button>
+                            <button class="pane-icon-btn" id="clearOriginalBtn" type="button" title="Clear original text" aria-label="Clear original text">
+                                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M3 4h10"></path><path d="M6.5 4V2.75c0-.4.34-.75.75-.75h1.5c.41 0 .75.35.75.75V4"></path><path d="M4.5 4l.6 8.4c.04.6.53 1.1 1.13 1.1h3.54c.6 0 1.09-.5 1.13-1.1L11.5 4"></path><path d="M6.5 7v4"></path><path d="M9.5 7v4"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <div class="editor-body">
                     <div class="line-numbers" id="originalLineNumbers"><div class="line-numbers-inner" id="originalLineNumbersInner">1</div></div>
                     <div class="editor-scroll">
                         <div class="highlight-layer" id="originalHighlight"><div class="highlight-layer-inner" id="originalHighlightInner"></div></div>
-                        <textarea id="originalText" spellcheck="false" wrap="off" placeholder="Paste or type the modified text or drag and drop an file..."></textarea>
+                        <textarea id="originalText" spellcheck="false" wrap="off" placeholder="Paste or type the original text or drag and drop an file..."></textarea>
                     </div>
                 </div>
             </div>
             <div class="editor-pane" id="modifiedPane">
-                <div class="pane-header">Modified text <span class="pane-meta" id="rightMeta"></span></div>
+                <div class="pane-header">
+                    <span class="pane-title">Modified text</span>
+                    <div class="pane-header-right">
+                        <span class="pane-meta" id="rightMeta"></span>
+                        <div class="pane-actions">
+                            <button class="pane-icon-btn" id="copyModifiedBtn" type="button" title="Copy modified text" aria-label="Copy modified text">
+                                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1"></rect><path d="M3 11V3a1 1 0 0 1 1-1h8"></path></svg>
+                            </button>
+                            <button class="pane-icon-btn" id="clearModifiedBtn" type="button" title="Clear modified text" aria-label="Clear modified text">
+                                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M3 4h10"></path><path d="M6.5 4V2.75c0-.4.34-.75.75-.75h1.5c.41 0 .75.35.75.75V4"></path><path d="M4.5 4l.6 8.4c.04.6.53 1.1 1.13 1.1h3.54c.6 0 1.09-.5 1.13-1.1L11.5 4"></path><path d="M6.5 7v4"></path><path d="M9.5 7v4"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <div class="editor-body">
                     <div class="line-numbers" id="modifiedLineNumbers"><div class="line-numbers-inner" id="modifiedLineNumbersInner">1</div></div>
                     <div class="editor-scroll">
@@ -757,7 +845,46 @@
                Myers' O(ND) shortest-edit-script algorithm, operating on arrays
                of tokens (lines or words — the engine itself doesn't care).
                Pure functions, no DOM access, so they're easy to reuse or test.
+
+               To reconstruct the actual edit path afterwards, this keeps one
+               full snapshot of its working state per step of edit distance D
+               — so total memory grows with D², not just D. For two large and
+               genuinely similar texts D stays small and this is a non-issue,
+               but D climbs toward N+M for texts that are mostly unrelated —
+               and hits it exactly when one side is empty, since then every
+               token on the other side has to be "removed". At real-world
+               sizes (tens of thousands of word tokens) that specific case is
+               enough to exhaust a tab's memory outright, not just run slowly.
+               DIFF_SAFETY_CAP bounds that blowup: if D would climb past it,
+               computation bails out to diffArraysFallback below instead of
+               continuing to allocate snapshots.
                ================================================================ */
+
+            const DIFF_SAFETY_CAP = 2500;
+
+            // Always-safe O(n+m) fallback: trims the shared prefix/suffix and
+            // treats whatever's left in the middle as one wholesale
+            // remove-then-add. Not the minimal diff, but correct, fast, and
+            // memory-bounded no matter how large or how different the two
+            // inputs are.
+            function diffArraysFallback(a, b, isEqual) {
+                const n = a.length,
+                    m = b.length;
+                const maxPrefix = Math.min(n, m);
+                let prefix = 0;
+                while (prefix < maxPrefix && isEqual(a[prefix], b[prefix])) prefix++;
+
+                const maxSuffix = Math.min(n, m) - prefix;
+                let suffix = 0;
+                while (suffix < maxSuffix && isEqual(a[n - 1 - suffix], b[m - 1 - suffix])) suffix++;
+
+                const ops = [];
+                for (let i = 0; i < prefix; i++) ops.push({ type: 'equal', a: i, b: i });
+                for (let i = prefix; i < n - suffix; i++) ops.push({ type: 'remove', a: i });
+                for (let j = prefix; j < m - suffix; j++) ops.push({ type: 'add', b: j });
+                for (let i = 0; i < suffix; i++) ops.push({ type: 'equal', a: n - suffix + i, b: m - suffix + i });
+                return ops;
+            }
 
             function diffArrays(a, b, isEqual) {
                 isEqual = isEqual || function(x, y) { return x === y; };
@@ -770,8 +897,9 @@
                 v.set(1, 0);
                 const trace = [];
                 let finalD = -1;
+                const cap = Math.min(max, DIFF_SAFETY_CAP);
 
-                for (let d = 0; d <= max; d++) {
+                for (let d = 0; d <= cap; d++) {
                     for (let k = -d; k <= d; k += 2) {
                         let x;
                         if (k === -d || (k !== d && v.get(k - 1) < v.get(k + 1))) {
@@ -787,6 +915,14 @@
                     }
                     trace.push(new Map(v));
                     if (finalD >= 0) break;
+                }
+
+                if (finalD < 0) {
+                    // Didn't converge within the safety cap — fall back rather
+                    // than keep growing the trace.
+                    const ops = diffArraysFallback(a, b, isEqual);
+                    ops.usedFallback = true;
+                    return ops;
                 }
 
                 const ops = [];
@@ -913,7 +1049,7 @@
             const prefs = loadPrefs();
 
             const state = {
-                granularity: prefs.granularity === 'word' ? 'word' : 'line',
+                granularity: prefs.granularity === 'line' ? 'line' : 'word',
                 view: prefs.view === 'inline' ? 'inline' : 'split', // default split
                 theme: prefs.theme === 'dark' ? 'dark' : 'light',
                 autoCompare: prefs.autoCompare !== undefined ? !!prefs.autoCompare : true, // ON by default
@@ -921,6 +1057,7 @@
                 editorHeight: typeof prefs.editorHeight === 'number' ? prefs.editorHeight : 360,
                 lastBlocks: null, // most recently computed diff blocks
                 lastGranularity: null, // granularity used to compute lastBlocks
+                usedFallback: false, // true if the last compare hit DIFF_SAFETY_CAP and used the simplified fallback diff
                 hunks: [], // changed regions for the current comparison
                 currentHunk: -1 // index into hunks currently focused, -1 = none
             };
@@ -955,7 +1092,11 @@
                 diffOutput: document.getElementById('diffOutput'),
                 editorsResizer: document.getElementById('editorsResizer'),
                 originalPane: document.getElementById('originalPane'),
-                modifiedPane: document.getElementById('modifiedPane')
+                modifiedPane: document.getElementById('modifiedPane'),
+                copyOriginalBtn: document.getElementById('copyOriginalBtn'),
+                clearOriginalBtn: document.getElementById('clearOriginalBtn'),
+                copyModifiedBtn: document.getElementById('copyModifiedBtn'),
+                clearModifiedBtn: document.getElementById('clearModifiedBtn')
             };
 
             /* ================================================================
@@ -1190,6 +1331,49 @@
                 container.appendChild(frag);
             }
 
+            // Splits a side's sequence of {type, text, hunkIdx} segments into an
+            // array of lines (each an array of segments with no embedded '\n'),
+            // so word-granularity view can render one row per physical line —
+            // needed both to scope the changed-line tint and to keep behavior
+            // consistent with the line-granularity view.
+            function segmentsToWordLines(segments) {
+                const lines = [
+                    []
+                ];
+                segments.forEach(function(seg) {
+                    const parts = seg.text.split('\n');
+                    parts.forEach(function(part, idx) {
+                        if (part.length) {
+                            lines[lines.length - 1].push({ type: seg.type, text: part, hunkIdx: seg.hunkIdx });
+                        }
+                        if (idx < parts.length - 1) lines.push([]);
+                    });
+                });
+                return lines;
+            }
+
+            // Renders one physical line of word-granularity content, tinting the
+            // whole row very lightly if it contains a change — this is what makes
+            // a changed line easy to spot while scanning a large pasted block,
+            // since the token-level tok-add/tok-remove colors alone are easy to
+            // miss in a wall of text.
+            function renderWordLine(segments) {
+                const row = document.createElement('div');
+                row.className = 'word-line';
+                let hasAdd = false,
+                    hasRemove = false;
+                segments.forEach(function(seg) {
+                    appendWordSpan(row, seg.type, seg.text, seg.hunkIdx);
+                    if (seg.type === 'add') hasAdd = true;
+                    else if (seg.type === 'remove') hasRemove = true;
+                });
+                if (!row.childNodes.length) row.innerHTML = '&nbsp;';
+                if (hasAdd && hasRemove) row.classList.add('line-changed-both');
+                else if (hasAdd) row.classList.add('line-changed-add');
+                else if (hasRemove) row.classList.add('line-changed-remove');
+                return row;
+            }
+
             // Side-by-side for word granularity
             function renderSplitWord(blocks, blockHunk, leftContainer, rightContainer) {
                 const leftWrap = document.createElement('div');
@@ -1197,18 +1381,24 @@
                 const rightWrap = document.createElement('div');
                 rightWrap.className = 'words-flow';
 
+                const leftSegs = [];
+                const rightSegs = [];
                 for (let i = 0; i < blocks.length; i++) {
                     const block = blocks[i];
                     const text = block.items.join('');
                     if (block.type === 'equal') {
-                        leftWrap.appendChild(document.createTextNode(text));
-                        rightWrap.appendChild(document.createTextNode(text));
+                        leftSegs.push({ type: 'equal', text: text, hunkIdx: -1 });
+                        rightSegs.push({ type: 'equal', text: text, hunkIdx: -1 });
                     } else if (block.type === 'remove') {
-                        appendWordSpan(leftWrap, 'remove', text, blockHunk[i]);
+                        leftSegs.push({ type: 'remove', text: text, hunkIdx: blockHunk[i] });
                     } else if (block.type === 'add') {
-                        appendWordSpan(rightWrap, 'add', text, blockHunk[i]);
+                        rightSegs.push({ type: 'add', text: text, hunkIdx: blockHunk[i] });
                     }
                 }
+
+                segmentsToWordLines(leftSegs).forEach(function(line) { leftWrap.appendChild(renderWordLine(line)); });
+                segmentsToWordLines(rightSegs).forEach(function(line) { rightWrap.appendChild(renderWordLine(line)); });
+
                 leftContainer.appendChild(leftWrap);
                 rightContainer.appendChild(rightWrap);
             }
@@ -1217,17 +1407,12 @@
             function renderInlineWord(blocks, blockHunk, container) {
                 const wrap = document.createElement('div');
                 wrap.className = 'inline-view';
+                const segs = [];
                 for (let i = 0; i < blocks.length; i++) {
                     const block = blocks[i];
-                    const text = block.items.join('');
-                    if (block.type === 'equal') {
-                        wrap.appendChild(document.createTextNode(text));
-                    } else if (block.type === 'remove') {
-                        appendWordSpan(wrap, 'remove', text, blockHunk[i]);
-                    } else if (block.type === 'add') {
-                        appendWordSpan(wrap, 'add', text, blockHunk[i]);
-                    }
+                    segs.push({ type: block.type, text: block.items.join(''), hunkIdx: blockHunk[i] });
                 }
+                segmentsToWordLines(segs).forEach(function(line) { wrap.appendChild(renderWordLine(line)); });
                 container.appendChild(wrap);
             }
 
@@ -1337,9 +1522,19 @@
                 const stats = computeStats(blocks);
                 const total = stats.added + stats.removed + stats.unchanged;
                 el.statBar.innerHTML = '';
+
+                function appendFallbackNote() {
+                    if (!state.usedFallback) return;
+                    const note = document.createElement('span');
+                    note.className = 'fallback-note';
+                    note.textContent = ' — showing a simplified diff (input is large/different enough that an exact comparison risked running out of memory)';
+                    el.statNumbers.appendChild(note);
+                }
+
                 const noBlocksAtAll = blocks.length === 0 || (blocks.length === 1 && blocks[0].type === 'equal');
                 if (noBlocksAtAll) {
                     el.statNumbers.textContent = 'No differences — texts are identical';
+                    appendFallbackNote();
                     return;
                 }
                 if (stats.added === 0 && stats.removed === 0) {
@@ -1348,6 +1543,7 @@
                     // or removed. Say so instead of falsely claiming "identical" —
                     // the diff panel below is still showing the change.
                     el.statNumbers.textContent = 'No word-level differences (whitespace only)';
+                    appendFallbackNote();
                     return;
                 }
                 const segs = [
@@ -1368,6 +1564,7 @@
                     ' added · ' +
                     '<span class="n-remove">-' + stats.removed + '</span> ' + unit + (stats.removed === 1 ? '' : 's') +
                     ' removed';
+                appendFallbackNote();
             }
 
             /* ================================================================
@@ -1396,8 +1593,14 @@
                 const hunk = state.hunks[n];
                 if (!hunk) return;
 
-                // Find all elements in the diff panel that belong to this hunk
-                const marks = document.querySelectorAll('[data-hunk="' + n + '"]');
+                // Find all elements in the diff panel that belong to this hunk.
+                // Scoped to #diffOutput specifically — the source textareas also carry
+                // matching data-hunk spans (for their own highlight overlay), but those
+                // shouldn't be part of hunk navigation: their scroll position is driven
+                // by a CSS transform mirroring the textarea, not native scrolling, so
+                // scrollIntoView on them is a no-op and just leaves Prev/Next feeling
+                // broken. Navigation should move you through the diff result only.
+                const marks = document.querySelectorAll('#diffOutput [data-hunk="' + n + '"]');
                 marks.forEach(function(m) { m.classList.add('active-hunk'); });
 
                 if (marks.length) {
@@ -1450,6 +1653,7 @@
 
                     state.lastBlocks = blocks;
                     state.lastGranularity = state.granularity;
+                    state.usedFallback = !!ops.usedFallback;
                     state.hunks = hunks;
                     state.currentHunk = -1;
 
@@ -1471,6 +1675,7 @@
                 updateLineNumbers(el.modifiedText, el.modifiedLineNumbersInner);
                 state.lastBlocks = null;
                 state.lastGranularity = null;
+                state.usedFallback = false;
                 renderStats();
                 revertToPlain();
                 renderResultsPanel(null, null);
@@ -1497,19 +1702,23 @@
                 }
                 let out = '';
                 for (const block of blocks) {
-                    for (const tok of block.items) {
-                        if (block.type === 'add') out += '{+' + tok + '+}';
-                        else if (block.type === 'remove') out += '[-' + tok + '-]';
-                        else out += tok;
-                    }
+                    // Join the whole block's tokens into one chunk before wrapping.
+                    // Wrapping each word/space token individually (the old behavior)
+                    // is what produced fragmented, hard-to-read output like
+                    // "[-word-][- -]mountains" for a single contiguous change —
+                    // one bracket pair per contiguous change reads much better.
+                    const chunk = block.items.join('');
+                    if (block.type === 'add') out += '{+' + chunk + '+}';
+                    else if (block.type === 'remove') out += '[-' + chunk + '-]';
+                    else out += chunk;
                 }
                 return out;
             }
 
-            function copyResult() {
-                const text = buildPlainTextDiff();
-                if (!text) return;
-
+            // Shared clipboard helper — tries the async Clipboard API first, falls
+            // back to the classic hidden-textarea + execCommand approach. Used by
+            // both the "Copy diff as text" button and the new per-pane copy icons.
+            function copyTextToClipboard(text, onSuccess, onFailure) {
                 function fallbackCopy() {
                     const ta = document.createElement('textarea');
                     ta.value = text;
@@ -1517,25 +1726,54 @@
                     ta.style.opacity = '0';
                     document.body.appendChild(ta);
                     ta.select();
-                    try { document.execCommand('copy');
-                        flashCopyButton(); } catch (e) { flashCopyButton('Copy failed'); }
+                    try {
+                        document.execCommand('copy');
+                        onSuccess();
+                    } catch (e) {
+                        onFailure();
+                    }
                     document.body.removeChild(ta);
                 }
-
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(text).then(
-                        function() { flashCopyButton(); },
-                        fallbackCopy
-                    );
+                    navigator.clipboard.writeText(text).then(onSuccess, fallbackCopy);
                 } else {
                     fallbackCopy();
                 }
+            }
+
+            function copyResult() {
+                const text = buildPlainTextDiff();
+                if (!text) return;
+                copyTextToClipboard(text, function() { flashCopyButton(); }, function() { flashCopyButton('Copy failed'); });
             }
 
             function flashCopyButton(label) {
                 const original = 'Copy diff as text';
                 el.copyBtn.textContent = label || 'Copied!';
                 setTimeout(function() { el.copyBtn.textContent = original; }, 1400);
+            }
+
+            // Per-pane copy/clear icon buttons (one pair per textarea).
+            function flashIconButton(btn) {
+                btn.classList.add('flash-success');
+                clearTimeout(btn._flashTimer);
+                btn._flashTimer = setTimeout(function() { btn.classList.remove('flash-success'); }, 1200);
+            }
+
+            function copyPaneText(textarea, btn) {
+                if (!textarea.value) return;
+                copyTextToClipboard(textarea.value, function() { flashIconButton(btn); }, function() {});
+            }
+
+            function clearPaneText(textarea) {
+                if (!textarea.value) return;
+                textarea.value = '';
+                // Dispatch a real input event so this goes through the exact same
+                // path as the user manually deleting the text — line numbers,
+                // the highlight overlay, auto-compare, and hunk state all stay
+                // consistent without any special-casing here.
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                textarea.focus();
             }
 
             /* ================================================================
@@ -1600,6 +1838,14 @@
             function scheduleAutoCompare() {
                 if (!state.autoCompare) return;
                 clearTimeout(autoCompareTimer);
+                // Don't even schedule a compare while either side is still empty.
+                // The result wouldn't be meaningful yet (it's just "everything on
+                // the non-empty side is added/removed"), and for large pasted
+                // text this is exactly the shape of comparison — a lot of content
+                // against nothing — that pushes the diff engine's edit distance
+                // to its maximum and costs the most memory. Once both sides have
+                // content, typing resumes auto-compare as normal.
+                if (!el.originalText.value || !el.modifiedText.value) return;
                 autoCompareTimer = setTimeout(runCompare, 450);
             }
 
@@ -1608,6 +1854,7 @@
                 updateLineNumbers(textarea, lineNumbersInner);
                 if (state.lastBlocks) {
                     state.lastBlocks = null;
+                    state.usedFallback = false;
                     renderStats();
                     renderResultsPanel(null, null);
                     resetHunkNav();
@@ -1704,6 +1951,10 @@
             el.compareBtn.addEventListener('click', runCompare);
             el.clearBtn.addEventListener('click', clearAll);
             el.copyBtn.addEventListener('click', copyResult);
+            el.copyOriginalBtn.addEventListener('click', function() { copyPaneText(el.originalText, el.copyOriginalBtn); });
+            el.clearOriginalBtn.addEventListener('click', function() { clearPaneText(el.originalText); });
+            el.copyModifiedBtn.addEventListener('click', function() { copyPaneText(el.modifiedText, el.copyModifiedBtn); });
+            el.clearModifiedBtn.addEventListener('click', function() { clearPaneText(el.modifiedText); });
             el.hunkPrev.addEventListener('click', function() { goToHunk(-1); });
             el.hunkNext.addEventListener('click', function() { goToHunk(1); });
 
@@ -1800,8 +2051,9 @@
                 setupDragDrop(el.originalText, el.originalPane);
                 setupDragDrop(el.modifiedText, el.modifiedPane);
 
-                // Auto-compare on load if there's content
-                if (el.originalText.value.trim() || el.modifiedText.value.trim()) {
+                // Auto-compare on load if both sides already have content
+                // (e.g. restored by the browser's back/forward cache).
+                if (el.originalText.value.trim() && el.modifiedText.value.trim()) {
                     if (state.autoCompare) {
                         setTimeout(runCompare, 300);
                     }
